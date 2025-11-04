@@ -25,19 +25,17 @@ YourUnityProject/
 └── CompileProject.sh                           ← Copy here (Linux/Mac)
 ```
 
-### 2. Update Project-Specific Names
+### 2. Update Project-Specific Names (Optional)
 
-Open each file and replace the following placeholders:
+The white-label version uses the global namespace (no namespace required), making setup simpler. You can optionally customize the log markers:
 
-| Placeholder | Replace With | Example |
-|------------|--------------|---------|
-| `YourProject` | Your project name | `MyGame` |
-| `YOURPROJECT` | Your project name (uppercase) | `MYGAME` |
+**Optional:** Update log messages containing `[YOURPROJECT AUTO-COMPILE]` to match your project name:
+- `CompilationReporter.cs` - All log messages
+- `CompilationReporterCLI.cs` - All log messages
+- `CompileProject_Silent.bat` - Line 58 (completion message check)
+- `CompileProject_Silent.sh` - Line 49 (completion message check)
 
-**Files to update:**
-- `CompilationReporter.cs` - Line 11 (namespace)
-- `CompilationReporterCLI.cs` - Line 8 (namespace)
-- Both files - All log messages containing `[YOURPROJECT AUTO-COMPILE]`
+**Note:** Namespace customization is NOT needed - the CLI uses the global namespace for simplicity.
 
 ### 3. Update Unity Paths (Batch Script)
 
@@ -107,57 +105,80 @@ Temp/CompilationErrors.log
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│ 1. Batch Script Launches Unity in Batch Mode           │
+│ 1. Batch Script Deletes Old Reports                    │
+│    Forces fresh compilation check                       │
+└───────────────────┬─────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────┐
+│ 2. Batch Script Launches Unity in Batch Mode           │
 │    .\CompileProject_Silent.bat                          │
 └───────────────────┬─────────────────────────────────────┘
                     │
                     ▼
 ┌─────────────────────────────────────────────────────────┐
-│ 2. Unity Loads Project & Begins Compilation            │
+│ 3. Unity Loads Project & Fully Initializes              │
 │    CompilationReporter hooks into CompilationPipeline  │
 └───────────────────┬─────────────────────────────────────┘
                     │
                     ▼
 ┌─────────────────────────────────────────────────────────┐
-│ 3. CompilationReporterCLI.CompileAndExit() Executes    │
-│    - Waits for compilation to finish                    │
+│ 4. CompilationReporterCLI.CompileAndExit() Executes    │
+│    - Forces recompilation with RequestScriptCompilation │
+│    - Waits for compilation to start (up to 20s)         │
+│    - Waits for compilation to finish (up to 60s)        │
 │    - Generates Temp/CompilationErrors.log               │
+│    - Logs completion message                            │
 │    - Does NOT exit (intentional!)                       │
 └───────────────────┬─────────────────────────────────────┘
                     │
                     ▼
 ┌─────────────────────────────────────────────────────────┐
-│ 4. Batch Script Detects Report File                    │
+│ 5. Batch Script Detects Report File                    │
 │    - Waits up to 2 minutes                              │
-│    - Gives 2-second grace period                        │
 └───────────────────┬─────────────────────────────────────┘
                     │
                     ▼
 ┌─────────────────────────────────────────────────────────┐
-│ 5. Batch Script Terminates Unity                       │
+│ 6. Batch Script Waits for Completion Message           │
+│    - Checks log for "[YOURPROJECT AUTO-COMPILE]        │
+│      Compilation complete" message                       │
+│    - Ensures compilation actually finished               │
+└───────────────────┬─────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────┐
+│ 7. Batch Script Terminates Unity                       │
 │    taskkill /IM Unity.exe /F                            │
 └───────────────────┬─────────────────────────────────────┘
                     │
                     ▼
 ┌─────────────────────────────────────────────────────────┐
-│ 6. Exit Code Returned                                   │
+│ 8. Exit Code Returned                                   │
 │    0 = Success  |  1 = Failure                          │
 └─────────────────────────────────────────────────────────┘
 ```
 
 ## 🎯 Critical Design Notes
 
-### Why No `-quit` Flag?
+### Why No `-quit` Flag & Compilation Verification?
 
-**Problem:** Unity's `-quit` flag causes Unity to exit immediately after executing the method, often before the report file is fully written.
+**Problem 1:** Unity's `-quit` flag causes Unity to exit immediately after executing the method, often before the report file is fully written.
+
+**Problem 2:** If Unity already compiled the project, it might not recompile, leading to false positives from cached reports.
 
 **Solution:** 
+- **Delete old reports** before starting Unity (forces fresh check)
+- **Force recompilation** using `CompilationPipeline.RequestScriptCompilation()`
+- **Wait for compilation to actually start** (up to 20 seconds, retrying if needed)
+- **Wait for compilation to finish** (up to 60 seconds)
 - Launch Unity with `start /B` (background process)
-- Let `CompileAndExit()` generate the report
+- Let `CompileAndExit()` generate the report and log completion message
 - Batch script waits for report file to appear
+- **Batch script waits for completion message** in log (ensures compilation finished)
 - Batch script explicitly kills Unity with `taskkill`
 
-This prevents the race condition where Unity exits before writing the file.
+This prevents the race condition where Unity exits before writing the file, and ensures Unity actually compiles rather than using cached results.
 
 ### Report Format
 
@@ -215,15 +236,15 @@ if exist "C:\Program Files\Unity\Hub\Editor\YOUR_VERSION\Editor\Unity.exe" (
 - Check `Temp/UnityBatchCompile.log` for Unity's output
 - Open project manually to see if there are pre-existing errors
 
-### Wrong Namespace
+### Wrong Method Name
 **Error:** `The type or namespace name 'CompilationReporterCLI' could not be found`
 
-**Fix:** Ensure namespace in C# files matches your project name:
-```csharp
-namespace YourProject.Editor  // Must match -executeMethod argument
+**Fix:** The white-label version uses the global namespace (no namespace required). Ensure batch script uses:
+```batch
+-executeMethod CompilationReporterCLI.CompileAndExit
 ```
 
-And batch script:
+**Note:** If you customize namespaces, ensure the batch script matches:
 ```batch
 -executeMethod YourProject.Editor.CompilationReporterCLI.CompileAndExit
 ```
@@ -285,7 +306,9 @@ Developed for the LBEAST SDK project by AJ Campbell and Claude AI (Anthropic).
 
 ## 🔗 See Also
 
-- [Claude Unity Rules.txt](../Claude%20Unity%20Rules.txt) - Complete coding standards and workflow documentation
 - [Unity Documentation - Batch Mode](https://docs.unity3d.com/Manual/CommandLineArguments.html)
 - [CompilationPipeline API](https://docs.unity3d.com/ScriptReference/Compilation.CompilationPipeline.html)
+
+
+
 

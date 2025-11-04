@@ -24,6 +24,10 @@ REM Get project path
 set PROJECT_PATH=%~dp0
 set PROJECT_PATH=%PROJECT_PATH:~0,-1%
 
+REM Delete old report files to force fresh compilation check
+if exist "%PROJECT_PATH%\Temp\CompilationErrors.log" del "%PROJECT_PATH%\Temp\CompilationErrors.log"
+if exist "%PROJECT_PATH%\Temp\UnityBatchCompile.log" del "%PROJECT_PATH%\Temp\UnityBatchCompile.log"
+
 REM Start Unity without -quit flag (CRITICAL: Do not add -quit!)
 REM No namespace customization needed - CompilationReporterCLI is in global namespace
 start "Unity Auto-Compiler" /B %UNITY_PATH% -batchmode -nographics -projectPath "%PROJECT_PATH%" -executeMethod CompilationReporterCLI.CompileAndExit -logFile "%PROJECT_PATH%\Temp\UnityBatchCompile.log"
@@ -46,7 +50,20 @@ taskkill /IM Unity.exe /F >nul 2>&1
 exit /b 1
 
 :REPORT_FOUND
-REM Give Unity time to finish writing
+REM Give Unity time to finish writing and compilation
+REM Check log file for completion message
+set WAIT_COMPLETE=0
+set MAX_WAIT_COMPLETE=30
+:WAIT_FOR_COMPLETE
+findstr /C:"[YOURPROJECT AUTO-COMPILE] Compilation complete" "%PROJECT_PATH%\Temp\UnityBatchCompile.log" >nul 2>&1
+if %errorlevel% EQU 0 goto COMPILATION_COMPLETE
+timeout /t 1 /nobreak >nul
+set /a WAIT_COMPLETE+=1
+if %WAIT_COMPLETE% GEQ %MAX_WAIT_COMPLETE% goto COMPILATION_COMPLETE
+goto WAIT_FOR_COMPLETE
+
+:COMPILATION_COMPLETE
+REM Give Unity a moment to finish writing the report
 timeout /t 2 /nobreak >nul
 
 REM Kill Unity

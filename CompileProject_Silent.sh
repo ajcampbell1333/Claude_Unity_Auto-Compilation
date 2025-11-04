@@ -42,7 +42,18 @@ MAX_TIMEOUT=120
 
 while [ $TIMEOUT_COUNTER -lt $MAX_TIMEOUT ]; do
     if [ -f "$PROJECT_PATH/Temp/CompilationErrors.log" ]; then
-        # Report found - give Unity time to finish writing
+        # Report found - now wait for completion message in log
+        WAIT_COMPLETE=0
+        MAX_WAIT_COMPLETE=30
+        while [ $WAIT_COMPLETE -lt $MAX_WAIT_COMPLETE ]; do
+            if grep -q "\[YOURPROJECT AUTO-COMPILE\] Compilation complete" "$PROJECT_PATH/Temp/UnityBatchCompile.log" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+            WAIT_COMPLETE=$((WAIT_COMPLETE + 1))
+        done
+        
+        # Give Unity a moment to finish writing the report
         sleep 2
         
         # Kill Unity
