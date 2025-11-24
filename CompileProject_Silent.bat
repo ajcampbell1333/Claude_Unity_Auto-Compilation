@@ -38,7 +38,7 @@ set MAX_TIMEOUT=120
 
 :WAIT_FOR_REPORT
 if exist "%PROJECT_PATH%\Temp\CompilationErrors.log" goto REPORT_FOUND
-timeout /t 1 /nobreak >nul
+powershell -NoProfile -Command "Start-Sleep -Seconds 1" >nul
 set /a TIMEOUT_COUNTER+=1
 if %TIMEOUT_COUNTER% GEQ %MAX_TIMEOUT% goto TIMEOUT_REACHED
 goto WAIT_FOR_REPORT
@@ -55,16 +55,16 @@ REM Check log file for completion message
 set WAIT_COMPLETE=0
 set MAX_WAIT_COMPLETE=30
 :WAIT_FOR_COMPLETE
-findstr /C:"[YOURPROJECT AUTO-COMPILE] Compilation complete" "%PROJECT_PATH%\Temp\UnityBatchCompile.log" >nul 2>&1
+findstr /C:"[YOURPROJECT AUTO-COMPILE] Compilation report ready" "%PROJECT_PATH%\Temp\UnityBatchCompile.log" >nul 2>&1
 if %errorlevel% EQU 0 goto COMPILATION_COMPLETE
-timeout /t 1 /nobreak >nul
+powershell -NoProfile -Command "Start-Sleep -Seconds 1" >nul
 set /a WAIT_COMPLETE+=1
 if %WAIT_COMPLETE% GEQ %MAX_WAIT_COMPLETE% goto COMPILATION_COMPLETE
 goto WAIT_FOR_COMPLETE
 
 :COMPILATION_COMPLETE
 REM Give Unity a moment to finish writing the report
-timeout /t 2 /nobreak >nul
+powershell -NoProfile -Command "Start-Sleep -Seconds 2" >nul
 
 REM Kill Unity
 taskkill /IM Unity.exe /F >nul 2>&1

@@ -5,6 +5,7 @@
 #if UNITY_EDITOR
 using UnityEngine;
 using UnityEditor;
+using UnityEditor.Compilation;
 using System.IO;
 
 /// <summary>
@@ -18,81 +19,127 @@ using System.IO;
 /// </summary>
 public static class CompilationReporterCLI
 {
+    private const string REPORT_RELATIVE_PATH = "Temp/CompilationErrors.log";
+    private const double MAX_WAIT_SECONDS = 180.0;
+    private const double NO_COMPILE_GRACE_SECONDS = 5.0;
+
+    private static bool s_callbacksRegistered;
+    private static bool s_reportReady;
+    private static bool s_compilationObserved;
+    private static double s_cliStartTime;
+
     /// <summary>
     /// Compile the project and generate report
     /// Does NOT exit - batch script will kill Unity after reading report
     /// </summary>
     public static void CompileAndExit()
     {
-        Debug.Log("🚀🤖 [YOURPROJECT AUTO-COMPILE] CLI invoked - forcing compilation...");
+        Debug.Log("🚀🤖 [YOURPROJECT AUTO-COMPILE] CLI invoked - using compilation callbacks for completion detection");
 
-        // Wait for Unity to fully initialize before forcing compilation
-        EditorApplication.delayCall += () =>
+        s_reportReady = false;
+        s_compilationObserved = EditorApplication.isCompiling;
+        s_cliStartTime = EditorApplication.timeSinceStartup;
+
+        EditorApplication.delayCall += EnsureInitialCompilationSettled;
+    }
+
+    private static void EnsureInitialCompilationSettled()
+    {
+        if (EditorApplication.isCompiling)
         {
-            // Force a recompilation to ensure we actually compile
-            UnityEditor.Compilation.CompilationPipeline.RequestScriptCompilation();
-            
-            Debug.Log("📦 [YOURPROJECT AUTO-COMPILE] Recompilation requested - waiting for compilation to start...");
+            EditorApplication.delayCall += EnsureInitialCompilationSettled;
+            return;
+        }
 
-            // Wait for compilation to actually start
-            EditorApplication.delayCall += () =>
-            {
-                int waitStartCount = 0;
-                while (!EditorApplication.isCompiling && waitStartCount < 200) // Max 20 seconds for compilation to start
-                {
-                    System.Threading.Thread.Sleep(100);
-                    waitStartCount++;
-                    // Check every 10 iterations (1 second)
-                    if (waitStartCount % 10 == 0)
-                    {
-                        UnityEditor.Compilation.CompilationPipeline.RequestScriptCompilation(); // Keep requesting
-                    }
-                }
+        BeginCompilationMonitoring();
+    }
 
-                if (!EditorApplication.isCompiling && waitStartCount >= 200)
-                {
-                    Debug.LogWarning("⚠️ [YOURPROJECT AUTO-COMPILE] Compilation did not start after 20s - checking if already compiled");
-                    // Still generate a report even if compilation didn't start
-                    string projectRoot = Application.dataPath.Replace("/Assets", "");
-                    string reportPath = Path.Combine(projectRoot, "Temp/CompilationErrors.log");
-                    WriteCompilationReport(reportPath);
-                    Debug.Log($"✅ [YOURPROJECT AUTO-COMPILE] Status check complete → {reportPath}");
-                    return;
-                }
+    private static void BeginCompilationMonitoring()
+    {
+        RegisterCallbacks();
 
-                Debug.Log("⚙️ [YOURPROJECT AUTO-COMPILE] Compilation started - waiting for completion...");
+        if (!EditorApplication.isCompiling)
+        {
+            Debug.Log("📦 [YOURPROJECT AUTO-COMPILE] Requesting script compilation via callbacks...");
+            CompilationPipeline.RequestScriptCompilation();
+        }
 
-                // Now wait for compilation to finish
-                EditorApplication.delayCall += () =>
-                {
-                    int waitCount = 0;
-                    while (EditorApplication.isCompiling && waitCount < 600) // Max 60 seconds
-                    {
-                        System.Threading.Thread.Sleep(100);
-                        waitCount++;
-                    }
+        EditorApplication.update += MonitorCompilationState;
+    }
 
-                    if (EditorApplication.isCompiling)
-                    {
-                        Debug.LogWarning("⏰ [YOURPROJECT AUTO-COMPILE] Compilation still in progress after 60s timeout");
-                    }
-                    else
-                    {
-                        Debug.Log("✅ [YOURPROJECT AUTO-COMPILE] Compilation finished");
-                    }
+    private static void RegisterCallbacks()
+    {
+        if (s_callbacksRegistered)
+        {
+            return;
+        }
 
-                    // Force a compilation report generation after compilation completes
-                    string projectRoot = Application.dataPath.Replace("/Assets", "");
-                    string reportPath = Path.Combine(projectRoot, "Temp/CompilationErrors.log");
-                    
-                    // Generate the report
-                    WriteCompilationReport(reportPath);
+        CompilationPipeline.compilationStarted += OnCompilationStarted;
+        CompilationPipeline.compilationFinished += OnCompilationFinished;
+        s_callbacksRegistered = true;
+    }
 
-                    Debug.Log($"[YOURPROJECT AUTO-COMPILE] Compilation complete → {reportPath}");
-                    Debug.Log("⚠️  [YOURPROJECT AUTO-COMPILE] Unity will remain open - batch script will terminate when ready");
-                };
-            };
-        };
+    private static void CleanupCallbacks()
+    {
+        if (!s_callbacksRegistered)
+        {
+            return;
+        }
+
+        CompilationPipeline.compilationStarted -= OnCompilationStarted;
+        CompilationPipeline.compilationFinished -= OnCompilationFinished;
+        s_callbacksRegistered = false;
+    }
+
+    private static void OnCompilationStarted(object context)
+    {
+        s_compilationObserved = true;
+        Debug.Log("⚙️ [YOURPROJECT AUTO-COMPILE] Compilation started");
+    }
+
+    private static void OnCompilationFinished(object context)
+    {
+        Debug.Log("✅ [YOURPROJECT AUTO-COMPILE] Compilation finished - generating report");
+        EnsureReportFile();
+        s_reportReady = true;
+        CleanupCallbacks();
+    }
+
+    private static void MonitorCompilationState()
+    {
+        if (s_reportReady)
+        {
+            EditorApplication.update -= MonitorCompilationState;
+            Debug.Log("📄 [YOURPROJECT AUTO-COMPILE] Compilation report ready for external tooling");
+            return;
+        }
+
+        double elapsed = EditorApplication.timeSinceStartup - s_cliStartTime;
+
+        if (!s_compilationObserved && elapsed >= NO_COMPILE_GRACE_SECONDS)
+        {
+            Debug.LogWarning("⚠️ [YOURPROJECT AUTO-COMPILE] No compilation activity detected - writing current status");
+            EnsureReportFile();
+            s_reportReady = true;
+            CleanupCallbacks();
+            EditorApplication.update -= MonitorCompilationState;
+            return;
+        }
+
+        if (elapsed >= MAX_WAIT_SECONDS)
+        {
+            Debug.LogWarning("⏰ [YOURPROJECT AUTO-COMPILE] Timed out waiting for compilation callbacks - writing current status");
+            EnsureReportFile();
+            s_reportReady = true;
+            CleanupCallbacks();
+            EditorApplication.update -= MonitorCompilationState;
+        }
+    }
+
+    private static void EnsureReportFile()
+    {
+        string reportPath = Path.Combine(Application.dataPath.Replace("/Assets", ""), REPORT_RELATIVE_PATH);
+        WriteCompilationReport(reportPath);
     }
 
     private static void WriteCompilationReport(string reportPath)
@@ -128,7 +175,7 @@ public static class CompilationReporterCLI
             report.AppendLine();
 
             // Check for actual compilation errors via CompilationPipeline
-            var assemblies = UnityEditor.Compilation.CompilationPipeline.GetAssemblies();
+            var assemblies = CompilationPipeline.GetAssemblies();
             bool hasErrors = false;
             foreach (var assembly in assemblies)
             {
